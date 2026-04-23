@@ -13,3 +13,6 @@ Run the tests with the following command:
 
 You can turn on the plotting functions with "--plot".
 You can turn on printing to terminal with "-s --print".
+
+You can run all tests with the following command:
+"pytest"
