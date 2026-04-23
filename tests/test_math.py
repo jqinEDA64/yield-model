@@ -113,3 +113,20 @@ def test_exp_abs_det_Y(do_plot) :
 
     assert y_math.comp_E_AbsDet(my_img, cov, p1, 29) == pytest.approx(27.274674, rel=0.01)
 
+
+def test_PDF_X_vector(do_plot) :
+    p1 = y_basics.Point(12.5, 12.5)
+
+    x = np.linspace(-5, 5, 100)
+    y = np.linspace(-5, 5, 100)
+    X, Y = np.meshgrid(x, y)
+    z = X**2 + Y**2
+
+    my_img = y_basics.Image(z, ll_x=-5, ll_y=-5, pixel_size=0.2)
+    if do_plot:
+        my_img.plot()
+
+    gk = y_basics.Image(y_basics.getGaussian(12, 4), ll_x = 0, ll_y = 0, pixel_size = 4)
+    cov = y_basics.Covariance(my_img, gk.data)
+
+    assert y_math.getProb_GradPhi_Phi(my_img, cov, p1, 29, True) == pytest.approx(-7.64497, rel=0.01)

@@ -2,6 +2,7 @@ import numpy as np
 from scipy.integrate import quad
 from scipy.stats import multivariate_normal
 import warnings
+import math
 
 
 #############################################
@@ -226,3 +227,20 @@ def expected_abs_det(mu, sigma, print_warning=True):
 def comp_E_AbsDet(img, cov, pt, th) :
   mu, cov_mat = getMean_Cov_Y_cond(img, cov, pt, th)
   return expected_abs_det(mu, cov_mat)
+
+
+###############################################
+# Compute the PDF of the X-vector, given an
+# image, covariance, point, and threshold.
+###############################################
+
+
+def getProb_GradPhi_Phi(img, cov_img, pt, threshold, log = False) :
+  mu  = getMean_X(img    , pt)
+  cov = getCov_XX(cov_img, pt)
+  x   = np.array([0, 0, threshold])
+  logpdf = multivariate_normal.logpdf(x, mean=mu, cov=cov, allow_singular=False)
+  if log :
+    return logpdf
+  else :
+    return np.exp(logpdf)
