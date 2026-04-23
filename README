@@ -1,0 +1,14 @@
+Codebase for yield modeling in lithography simulation.
+
+Besides regular NumPy, SciPy, etc. modules, need the following modules:
+cv2
+pytest
+
+
+
+
+
+Run the tests with the following command:
+"pytest tests/test_basics.py" (or similar for different test files).
+
+You can turn on the plotting functions with "--plot".

@@ -19,10 +19,31 @@ def flToStr(val, precision=2, isSci=False):
     return f"{val:.{precision}e}"
   else:
     return f"{val:.{precision}f}"
-  
-  
+
+
 ################################################################################
-# Data classes: Point, image, gradient, etc.
+# Gaussian distribution (commonly used for kernels and noise models).
+################################################################################
+
+
+# Gaussian kernel
+def getGaussian(sigma, dx) :
+  # 1. Create a coordinate grid for the kernel
+  # We go out to 4-5 sigma to capture the tail
+  limit = int(5 * sigma / dx)
+  x = np.arange(-limit, limit + 1) * dx
+  y = np.arange(-limit, limit + 1) * dx
+  xx, yy = np.meshgrid(x, y)
+
+  # 2. Define the 2D Gaussian kernel g
+  g = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+  g /= np.sum(g) # Normalize for acid conservation
+
+  return g
+
+
+################################################################################
+# Data classes: Point, VectorField, Image, and Covariance.
 ################################################################################
 
 
@@ -44,9 +65,9 @@ class VectorField:
     Samples the vector field at (x, y).
     :param component: 'x', 'y', or 'both'
     """
-    x, y = pt.x, pt.y
-    val_x = self.u.get(x, y)
-    val_y = self.v.get(x, y)
+
+    val_x = self.u.get(pt)
+    val_y = self.v.get(pt)
 
     if component == 'x':
       return val_x
@@ -103,6 +124,7 @@ class VectorField:
     plt.tight_layout()
     plt.title(title)
     plt.show()
+
 
 # Image field (used for scalar fields)
 class Image:
@@ -223,3 +245,147 @@ class Image:
     if title != "":
       plt.title(title)
     plt.show()
+
+
+def convolve(image, kernel):
+  """
+  Performs 2D convolution with periodic (circular) boundary conditions.
+  """
+  k_h, k_w = kernel.shape
+  # Pad by half the kernel size on all sides using 'wrap'
+  pad_h, pad_w = k_h // 2, k_w // 2
+  padded = np.pad(image, ((pad_h, pad_h), (pad_w, pad_w)), mode='wrap')
+
+  # Perform convolution on the padded image
+  # We use BORDER_CONSTANT here because the padding already handles the wrap
+  conv = cv2.filter2D(padded, -1, kernel, borderType=cv2.BORDER_CONSTANT)
+
+  # Slice back to the original image dimensions
+  return conv[pad_h:-pad_h, pad_w:-pad_w]
+
+
+# The Covariance class computes the covariance between points in the image
+# based on a given kernel, and derivatives of the covariance with respect
+# to the coordinates of these points. The kernel is typically a Gaussian or similar smoothing function.
+class Covariance:
+
+  def __init__(self, img, k, scale = 1):
+
+    # Metadata about original image
+    dx   = img.pixel_size
+    dx2  = dx*dx
+    dx_2 = 1.0/dx2
+    ll_x = img.ll_x
+    ll_y = img.ll_y
+
+    #####################################
+    # Initialize the pointwise covariance
+    #####################################
+
+    # Compute gradient of the kernel
+    kx = np.gradient(k, dx, axis=1)
+    ky = np.gradient(k, dx, axis=0)
+    kxx= np.gradient(kx,dx, axis=1)
+    kyy= np.gradient(ky,dx, axis=0)
+    kxy= np.gradient(kx,dx, axis=0)
+
+    # Compute products of the kernel derivatives
+    k_0_0_0_0 = np.multiply(k, k)
+    k_1_0_0_0 = np.multiply(kx, k)
+    k_0_1_0_0 = np.multiply(ky, k)
+    k_2_0_0_0 = np.multiply(kxx, k)
+    k_0_2_0_0 = np.multiply(kyy, k)
+    k_1_1_0_0 = np.multiply(kxy, k)
+    k_1_0_1_0 = np.multiply(kx, kx)
+    k_1_0_0_1 = np.multiply(kx, ky)
+    k_0_1_0_1 = np.multiply(ky, ky)
+    k_2_0_1_0 = np.multiply(kxx, kx)
+    k_2_0_0_1 = np.multiply(kxx, ky)
+    k_0_2_1_0 = np.multiply(kyy, kx)
+    k_0_2_0_1 = np.multiply(kyy, ky)
+    k_1_1_1_0 = np.multiply(kxy, kx)
+    k_1_1_0_1 = np.multiply(kxy, ky)
+    k_2_0_2_0 = np.multiply(kxx, kxx)
+    k_0_2_2_0 = np.multiply(kyy, kxx)
+    k_0_2_0_2 = np.multiply(kyy, kyy)
+    k_2_0_1_1 = np.multiply(kxx, kxy)
+    k_0_2_1_1 = np.multiply(kyy, kxy)
+    k_1_1_1_1 = np.multiply(kxy, kxy)
+
+    #####################################
+    # Compute the covariance elements
+    #####################################
+
+    # Smoothed version of the input image
+    self.I  = Image(convolve(img.data, k), ll_x, ll_y, dx)
+
+    # Covariance elements
+    self.S_0_0_0_0 = Image(dx_2*scale*convolve(img.data, k_0_0_0_0), ll_x, ll_y, dx)
+    self.S_1_0_0_0 = Image(dx_2*scale*convolve(img.data, k_1_0_0_0), ll_x, ll_y, dx)
+    self.S_0_1_0_0 = Image(dx_2*scale*convolve(img.data, k_0_1_0_0), ll_x, ll_y, dx)
+    self.S_2_0_0_0 = Image(dx_2*scale*convolve(img.data, k_2_0_0_0), ll_x, ll_y, dx)
+    self.S_0_2_0_0 = Image(dx_2*scale*convolve(img.data, k_0_2_0_0), ll_x, ll_y, dx)
+    self.S_1_1_0_0 = Image(dx_2*scale*convolve(img.data, k_1_1_0_0), ll_x, ll_y, dx)
+    self.S_1_0_1_0 = Image(dx_2*scale*convolve(img.data, k_1_0_1_0), ll_x, ll_y, dx)
+    self.S_1_0_0_1 = Image(dx_2*scale*convolve(img.data, k_1_0_0_1), ll_x, ll_y, dx)
+    self.S_0_1_0_1 = Image(dx_2*scale*convolve(img.data, k_0_1_0_1), ll_x, ll_y, dx)
+    self.S_2_0_1_0 = Image(dx_2*scale*convolve(img.data, k_2_0_1_0), ll_x, ll_y, dx)
+    self.S_2_0_0_1 = Image(dx_2*scale*convolve(img.data, k_2_0_0_1), ll_x, ll_y, dx)
+    self.S_0_2_1_0 = Image(dx_2*scale*convolve(img.data, k_0_2_1_0), ll_x, ll_y, dx)
+    self.S_0_2_0_1 = Image(dx_2*scale*convolve(img.data, k_0_2_0_1), ll_x, ll_y, dx)
+    self.S_1_1_1_0 = Image(dx_2*scale*convolve(img.data, k_1_1_1_0), ll_x, ll_y, dx)
+    self.S_1_1_0_1 = Image(dx_2*scale*convolve(img.data, k_1_1_0_1), ll_x, ll_y, dx)
+    self.S_2_0_2_0 = Image(dx_2*scale*convolve(img.data, k_2_0_2_0), ll_x, ll_y, dx)
+    self.S_0_2_2_0 = Image(dx_2*scale*convolve(img.data, k_0_2_2_0), ll_x, ll_y, dx)
+    self.S_0_2_0_2 = Image(dx_2*scale*convolve(img.data, k_0_2_0_2), ll_x, ll_y, dx)
+    self.S_2_0_1_1 = Image(dx_2*scale*convolve(img.data, k_2_0_1_1), ll_x, ll_y, dx)
+    self.S_0_2_1_1 = Image(dx_2*scale*convolve(img.data, k_0_2_1_1), ll_x, ll_y, dx)
+    self.S_1_1_1_1 = Image(dx_2*scale*convolve(img.data, k_1_1_1_1), ll_x, ll_y, dx)
+
+  def derivative(self, p, orders=(0, 0, 0, 0)) :
+
+    if   orders == (0, 0, 0, 0) :
+      return self.S_0_0_0_0.get(p)
+    elif orders == (1, 0, 0, 0) or orders == (0, 0, 1, 0) :
+      return self.S_1_0_0_0.get(p)
+    elif orders == (0, 1, 0, 0) or orders == (0, 0, 0, 1) :
+      return self.S_0_1_0_0.get(p)
+    elif orders == (1, 0, 1, 0) :
+      return self.S_1_0_1_0.get(p)
+    elif orders == (0, 1, 0, 1) :
+      return self.S_0_1_0_1.get(p)
+    elif orders == (1, 1, 0, 0) or orders == (0, 0, 1, 1) :
+      return self.S_1_1_0_0.get(p)
+    elif orders == (1, 0, 0, 1) or orders == (0, 1, 1, 0) :
+      return self.S_1_0_0_1.get(p)
+    elif orders == (2, 0, 0, 0) or orders == (0, 0, 2, 0) :
+      return self.S_2_0_0_0.get(p)
+    elif orders == (0, 2, 0, 0) or orders == (0, 0, 0, 2) :
+      return self.S_0_2_0_0.get(p)
+    elif orders == (2, 0, 1, 0) or orders == (1, 0, 2, 0) :
+      return self.S_2_0_1_0.get(p)
+    elif orders == (2, 0, 0, 1) or orders == (0, 1, 2, 0) :
+      return self.S_2_0_0_1.get(p)
+    elif orders == (0, 2, 1, 0) or orders == (1, 0, 0, 2) :
+      return self.S_0_2_1_0.get(p)
+    elif orders == (0, 2, 0, 1) or orders == (0, 1, 0, 2) :
+      return self.S_0_2_0_1.get(p)
+    elif orders == (1, 1, 1, 0) or orders == (1, 0, 1, 1) :
+      return self.S_1_1_1_0.get(p)
+    elif orders == (1, 1, 0, 1) or orders == (0, 1, 1, 1) :
+      return self.S_1_1_0_1.get(p)
+    elif orders == (2, 0, 2, 0) :
+      return self.S_2_0_2_0.get(p)
+    elif orders == (0, 2, 2, 0) or orders == (2, 0, 0, 2) :
+      return self.S_0_2_2_0.get(p)
+    elif orders == (0, 2, 0, 2)  :
+      return self.S_0_2_0_2.get(p)
+    elif orders == (2, 0, 1, 1) or orders == (1, 1, 2, 0) :
+      return self.S_2_0_1_1.get(p)
+    elif orders == (0, 2, 1, 1) or orders == (1, 1, 0, 2) :
+      return self.S_0_2_1_1.get(p)
+    elif orders == (1, 1, 1, 1) :
+      return self.S_1_1_1_1.get(p)
+    else :
+      raise ValueError(f"Invalid orders: {orders}")
+      return -1
