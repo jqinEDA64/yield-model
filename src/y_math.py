@@ -296,3 +296,47 @@ def getDefectDensity(cov, pt, th) :
 
   # Restore the small prefactor
   return np.exp(log_p_0)*result
+
+
+###############################################
+# Integration of y(x), where y may be very small.
+# This uses adaptive logarithmic integration to 
+# handle cases where y(x) is small.
+###############################################
+
+def adaptive_log_integrate(x, y):
+  """
+  Integrates y(x) accurately. Uses Log-Linear interpolation where
+  y > 0 and Standard Trapezoidal where y <= 0 or y is flat.
+  """
+
+  y[np.isnan(y)] = 0
+
+  dx = np.diff(x)
+  y_i = y[:-1]
+  y_next = y[1:]
+
+  # Initialize array for segment integrals
+  integrals = np.zeros_like(dx)
+
+  # Condition 1: Both endpoints must be strictly positive for log-math
+  pos_mask = (y_i > 0) & (y_next > 0)
+
+  # Condition 2: Values must be different enough to avoid division by zero
+  # We check the ratio instead of the raw difference for scale invariance
+  ratio = np.divide(y_next, y_i, where=pos_mask, out=np.ones_like(y_i))
+  diff_mask = pos_mask & (np.abs(ratio - 1.0) > 1e-6)
+
+  # Case A: Log-Linear Integration
+  # Formula: dx * (y_next - y_i) / (ln(y_next) - ln(y_i))
+  idx_log = np.where(diff_mask)
+  num = y_next[idx_log] - y_i[idx_log]
+  den = np.log(y_next[idx_log]) - np.log(y_i[idx_log])
+  integrals[idx_log] = dx[idx_log] * (num / den)
+
+  # Case B: Standard Trapezoidal Fallback
+  # Used if y contains zeros, negatives, or values are nearly equal
+  idx_trapz = np.where(~diff_mask)
+  integrals[idx_trapz] = dx[idx_trapz] * (y_i[idx_trapz] + y_next[idx_trapz]) / 2.0
+
+  return np.sum(integrals)
