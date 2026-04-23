@@ -55,6 +55,6 @@ def test_covariance(do_plot) :
     cov_der = cov     .derivative(p1, orders=(1, 0, 1, 0))
 
     if do_plot:
-        cov.S_1_0_1_0.plot(title = "Covariance derivative $\\partial x_1 \\partial x_2 \Sigma(x_1, x_2)$")
+        cov.S_1_0_1_0.plot(title = "Covariance derivative $\\partial x_1 \\partial x_2 \\Sigma(x_1, x_2)$")
 
     assert cov_der == pytest.approx(0.86169, rel=1e-3)
