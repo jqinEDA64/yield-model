@@ -219,3 +219,10 @@ def expected_abs_det(mu, sigma, print_warning=True):
 
   # Scale the result back up: Result * S^2
   return (2 / np.pi) * integral_val * (scale_factor**2)
+
+
+# Compute the expected value of the absolute value of the determinant
+# of the Y-vector for a given image, covariance, point, and threshold.
+def comp_E_AbsDet(img, cov, pt, th) :
+  mu, cov_mat = getMean_Cov_Y_cond(img, cov, pt, th)
+  return expected_abs_det(mu, cov_mat)
