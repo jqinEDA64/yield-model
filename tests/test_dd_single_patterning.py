@@ -94,10 +94,22 @@ def test_IMEC_LS(do_plot) :
     dd_vals_1, cd_vals_1 = zip(*results_1)
     dd_vals_2, cd_vals_2 = zip(*results_2)
 
+    
+    plt.plot(cd_vals_1, dd_vals_1, label = "Scale = 0.90", color = "blue")
+    plt.yscale("log")
+    plt.ylabel("Defect density [cm$^{-2}$]")
+    plt.xlabel("Space CD [nm]")
+    plt.savefig("output/1D_LS_DD/DefectDensity_vs_SpaceCD_0.90.png", dpi=300)
     if do_plot :
-        plt.plot(cd_vals_1, dd_vals_1, label = "Scale = 0.90", color = "blue")
-        plt.plot(cd_vals_2, dd_vals_2, label = "Scale = 0.95", color = "red")
-        plt.yscale("log")
-        plt.ylabel("Defect density [cm$^{-2}$]")
-        plt.xlabel("Space CD [nm]")
         plt.show()
+    plt.close('all')
+
+    
+    plt.plot(cd_vals_2, dd_vals_2, label = "Scale = 0.95", color = "red")
+    plt.yscale("log")
+    plt.ylabel("Defect density [cm$^{-2}$]")
+    plt.xlabel("Space CD [nm]")
+    plt.savefig("output/1D_LS_DD/DefectDensity_vs_SpaceCD_0.95.png", dpi=300)
+    if do_plot :
+        plt.show()
+    plt.close('all')
