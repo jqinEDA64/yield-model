@@ -244,3 +244,42 @@ def getProb_GradPhi_Phi(img, cov_img, pt, threshold, log = False) :
     return logpdf
   else :
     return np.exp(logpdf)
+  
+
+#################################
+# Kac-Rice integration
+#################################
+
+
+def getDefectDensity(cov, pt, th) :
+
+  img     = cov.I        # Use the diffused aerial image
+  img_val = img.get(pt)
+
+  # Define boundaries for integration
+  lower   = -np.inf if img_val > th else th
+  upper   =  th     if img_val > th else np.inf
+
+  # Extract the value of log(p(\phi', \phi)) where it is
+  # around the highest. This makes the integrand larger
+  # and relieves some stress on the floating-point capabilities
+  # of the integrator.
+  log_p_0 = getProb_GradPhi_Phi(img, cov, pt, th, log = True)
+
+  # Define the integrand
+  def integrand(u):
+    log_p     = getProb_GradPhi_Phi(img, cov, pt, u, log = True)
+    log_diff  = log_p - log_p_0
+    if log_diff < -12 :  # Numerical cutoff for the integration
+      return 0
+    
+    #E_Abs_Det = 1  # TODO jqin: Better approximation for tough computation
+    E_Abs_Det = comp_E_AbsDet(img, cov, pt, u)
+
+    return E_Abs_Det * np.exp(log_diff)
+
+  # Perform the numerical integration
+  result, _ = quad(integrand, lower, upper)
+
+  # Restore the small prefactor
+  return np.exp(log_p_0)*result
