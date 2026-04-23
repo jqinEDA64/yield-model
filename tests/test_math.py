@@ -132,7 +132,10 @@ def test_PDF_X_vector(do_plot) :
     assert y_math.getProb_GradPhi_Phi(my_img, cov, p1, 29, True) == pytest.approx(-7.64497, rel=0.01)
 
 
+# This test computes the full Kac-Rice formula,
+# including the full computation of E[|det|].
 def test_Kac_Rice(do_plot) :
+    y_math.ABS_DET_FLAG = 1
     p1 = y_basics.Point(12.5, 12.5)
 
     x = np.linspace(-5, 5, 100)
@@ -148,3 +151,4 @@ def test_Kac_Rice(do_plot) :
     cov = y_basics.Covariance(my_img, gk.data)
 
     assert y_math.getDefectDensity(cov, p1, 29) == pytest.approx(0.0489, rel=0.01)
+    y_math.ABS_DET_FLAG = 0
