@@ -4,8 +4,6 @@ import numpy as np
 import pytest
 
 
-
-
 def test_point() :
     # Example usage
     p = y_basics.Point(5.5, 12.0)

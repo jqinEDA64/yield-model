@@ -5,6 +5,14 @@ import warnings
 import math
 
 
+# Options for computing the absolute value
+# of the determinant.
+#
+# 0 = None; use 1 as a placeholder for E[|det|]
+# 1 = Full integration using the characteristic function
+ABS_DET_FLAG = 0
+
+
 #############################################
 # Schur complement
 #############################################
@@ -273,8 +281,13 @@ def getDefectDensity(cov, pt, th) :
     if log_diff < -12 :  # Numerical cutoff for the integration
       return 0
     
-    #E_Abs_Det = 1  # TODO jqin: Better approximation for tough computation
-    E_Abs_Det = comp_E_AbsDet(img, cov, pt, u)
+    E_Abs_Det = 1
+    if ABS_DET_FLAG == 0 :
+      E_Abs_Det = 1  # Placeholder for E[|det|]
+    elif ABS_DET_FLAG == 1 :
+      E_Abs_Det = comp_E_AbsDet(img, cov, pt, u)
+    else :
+      raise ValueError(f"Invalid ABS_DET_FLAG value: {ABS_DET_FLAG}")
 
     return E_Abs_Det * np.exp(log_diff)
 

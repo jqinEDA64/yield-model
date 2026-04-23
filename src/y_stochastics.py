@@ -1,5 +1,4 @@
-import y_basics
-import y_math
+from src import y_basics
 
 import numpy as np
 from scipy.interpolate import CubicSpline
