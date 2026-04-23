@@ -2,6 +2,7 @@ from src import y_math, y_basics
 
 import numpy as np
 import pytest
+from scipy.stats import multivariate_normal
 
 def test_schur_complement(do_print) :
 
@@ -53,3 +54,42 @@ def test_Y_distribution(do_plot, do_print) :
     
     assert np.linalg.norm(mean    - mean_correct   ) == pytest.approx(0, abs=1e-3)
     assert np.linalg.norm(cov_mat - cov_mat_correct) == pytest.approx(0, abs=1e-3)
+
+def test_exp_abs_det(do_print) :
+
+    # --- Example Usage ---
+    # Mean vector [E[X], E[Y], E[Z]]
+    mu_vec = np.array([100, 10, 10.0])
+
+    # Covariance matrix (must be positive semi-definite)
+    cov_mat = np.array([[10.0, 0.2, 2.2],
+                        [0.2, 1.0, 0.3],
+                        [2.2, 0.3, 10.0]])
+
+    result = y_math.expected_abs_det(mu_vec, cov_mat, print_warning = True)
+    samples = multivariate_normal.rvs(mean=mu_vec, cov=cov_mat, size=100000)
+    dets = samples[:,0] * samples[:,2] - samples[:,1]**2
+
+    if do_print :
+        print(f"Expected Absolute Determinant: {result:.6f}")
+        print(f"Monte Carlo Estimate: {np.mean(np.abs(dets)):.6f}")
+
+    assert result == pytest.approx(np.mean(np.abs(dets)), rel=0.05)
+
+    # --- Example Usage ---
+    # Mean vector [E[X], E[Y], E[Z]]
+    mu_vec = np.array([0, 0, -2.0])
+
+    # Covariance matrix (must be positive semi-definite)
+    cov_mat = np.eye(3) * 2
+
+    result = y_math.expected_abs_det(mu_vec, cov_mat, print_warning = True)
+    samples = multivariate_normal.rvs(mean=mu_vec, cov=cov_mat, size=100000)
+    dets = samples[:,0] * samples[:,2] - samples[:,1]**2
+
+    if do_print :
+        print(f"Expected Absolute Determinant: {result:.6f}")
+        print(f"Monte Carlo Estimate: {np.mean(np.abs(dets)):.6f}")
+
+    assert result == pytest.approx(np.mean(np.abs(dets)), rel=0.05)
+
