@@ -238,7 +238,7 @@ def comp_E_AbsDet(img, cov, pt, th) :
 
 
 ###############################################
-# Compute the PDF of the X-vector, given an
+# Compute the P/CDF of the X-vector, given an
 # image, covariance, point, and threshold.
 ###############################################
 
@@ -252,7 +252,53 @@ def getProb_GradPhi_Phi(img, cov_img, pt, threshold, log = False) :
     return logpdf
   else :
     return np.exp(logpdf)
+
+# Computes the probability that u > threshold (side = "upper")
+# or u < threshold (side = "lower"). Essentially, requires another
+# Gaussian conditioning.
+def getCDF_GradPhi_Phi(img, cov_img, pt, threshold, side='lower', log=True):
   
+    """
+    Computes the CDF (or SF) of the last dimension (phi) conditioned on 
+    the first two dimensions (phi_x, phi_y) being zero.
+    """
+  
+    # 1. Get joint Mean (3,) and Covariance (3,3) using existing functions
+    mu_joint    = getMean_X(img, pt)
+    Sigma_joint = getCov_XX(cov_img, pt)
+
+    # 2. Partition the vectors and matrices
+    # Indices 0,1 are the 'given'  variables (x in your helper)
+    # Index   2   is  the 'target' variable  (y in your helper)
+    mu_x = mu_joint[0:2]    # [mu_phix, mu_phiy]
+    mu_y = mu_joint[2:3]    # [mu_phi] (kept as 1D array for your helper)
+
+    Sigma_xx = Sigma_joint[0:2, 0:2] # Top-left     2x2
+    Sigma_yy = Sigma_joint[2:3, 2:3] # Bottom-right 1x1
+    Sigma_yx = Sigma_joint[2:3, 0:2] # Bottom-left  1x2
+
+    # 3. Compute conditional distribution using your existing function
+    # x_0 is the observation [0, 0] for the first two dimensions
+    mu_cond, Sigma_cond = condition_gaussian(
+        mu_y, mu_x, Sigma_yy, Sigma_xx, Sigma_yx, np.array([0, 0])
+    )
+
+    # 4. Extract scalars for the univariate normal distribution
+    # We use .item() to pull the scalar value out of the 1x1 result arrays
+    mean_final = mu_cond   .item()
+    var_final  = Sigma_cond.item()
+    
+    # Numerical stability check for variance
+    std_final = np.sqrt(max(var_final, 1e-16))
+
+    # 5. Compute probability in log-scale
+    if side == 'lower':  # Probability x[2] < threshold
+        
+        res = norm.logcdf(threshold, loc=mean_final, scale=std_final)
+    else:                # Probability x[2] > threshold
+        res = norm.logsf (threshold, loc=mean_final, scale=std_final)  # logsf(x) is log(1 - cdf(x))
+
+    return res if log else np.exp(res)
 
 #################################
 # Kac-Rice integration
