@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.integrate import quad
-from scipy.stats import multivariate_normal
+from scipy.stats import multivariate_normal, norm
 import warnings
 import math
 
@@ -10,7 +10,8 @@ import math
 #
 # 0 = None; use 1 as a placeholder for E[|det|]
 # 1 = Full integration using the characteristic function
-ABS_DET_FLAG = 0
+# 2 = CDF approximation, multiplied by |det| at the threshold
+ABS_DET_FLAG = 2
 
 
 #############################################
@@ -292,13 +293,18 @@ def getCDF_GradPhi_Phi(img, cov_img, pt, threshold, side='lower', log=True):
     std_final = np.sqrt(max(var_final, 1e-16))
 
     # 5. Compute probability in log-scale
+    log_cond_cdf = None
     if side == 'lower':  # Probability x[2] < threshold
-        
-        res = norm.logcdf(threshold, loc=mean_final, scale=std_final)
+        log_cond_cdf = norm.logcdf(threshold, loc=mean_final, scale=std_final)
     else:                # Probability x[2] > threshold
-        res = norm.logsf (threshold, loc=mean_final, scale=std_final)  # logsf(x) is log(1 - cdf(x))
+        log_cond_cdf = norm.logsf (threshold, loc=mean_final, scale=std_final)  # logsf(x) is log(1 - cdf(x))
 
-    return res if log else np.exp(res)
+    # 6. Compute marginal PDF: p(grad_x = 0, grad_y = 0)
+    log_pdf = multivariate_normal.logpdf([0, 0], mean=mu_x, cov=Sigma_xx)
+
+    # Return result
+    log_result = log_cond_cdf + log_pdf
+    return log_result if log else np.exp(log_result)
 
 #################################
 # Kac-Rice integration
@@ -314,6 +320,13 @@ def getDefectDensity(cov, pt, th) :
   lower   = -np.inf if img_val > th else th
   upper   =  th     if img_val > th else np.inf
 
+  # Quick return if using CDF approximation
+  if ABS_DET_FLAG == 2 :
+    side = 'lower' if lower < th else 'upper'
+    cdf  = getCDF_GradPhi_Phi(img, cov, pt, th, side, False)
+    EDet = comp_E_AbsDet(img, cov, pt, th)
+    return EDet*cdf
+
   # Extract the value of log(p(\phi', \phi)) where it is
   # around the highest. This makes the integrand larger
   # and relieves some stress on the floating-point capabilities
@@ -328,7 +341,7 @@ def getDefectDensity(cov, pt, th) :
       return 0
     
     E_Abs_Det = 1
-    if ABS_DET_FLAG == 0 :
+    if  ABS_DET_FLAG == 0 :
       E_Abs_Det = 1  # Placeholder for E[|det|]
     elif ABS_DET_FLAG == 1 :
       E_Abs_Det = comp_E_AbsDet(img, cov, pt, u)

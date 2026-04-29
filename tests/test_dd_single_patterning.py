@@ -34,8 +34,12 @@ def test_dd_1D_LS(do_plot, do_print) :
         plt.title("Defect density in 1D LS pattern")
         plt.show()
     
-    assert np.log10(dd_min) == pytest.approx(np.log10(9.5e-184), rel=1e-1)
-    assert np.log10(dd_max) == pytest.approx(np.log10(1.0e-13 ), rel=1e-1)
+    if   y_math.ABS_DET_FLAG == 0 :
+        assert np.log10(dd_min) == pytest.approx(np.log10(9.5e-184), rel=1e-1)
+        assert np.log10(dd_max) == pytest.approx(np.log10(1.0e-13 ), rel=1e-1)
+    elif y_math.ABS_DET_FLAG == 2 :
+        assert np.log10(dd_min) == pytest.approx(np.log10(6.952503392675953e-190), rel=1e-1)
+        assert np.log10(dd_max) == pytest.approx(np.log10(5.529240398477354e-19 ), rel=1e-1)
 
 
 def getDDandCD(pitch, duty_cycle, th, scale = 1.0) :
@@ -94,7 +98,7 @@ def test_IMEC_LS(do_plot) :
     dd_vals_1, cd_vals_1 = zip(*results_1)
     dd_vals_2, cd_vals_2 = zip(*results_2)
 
-    
+    plt.close('all')
     plt.plot(cd_vals_1, dd_vals_1, label = "Scale = 0.90", color = "blue")
     plt.yscale("log")
     plt.ylabel("Defect density [cm$^{-2}$]")
@@ -104,7 +108,7 @@ def test_IMEC_LS(do_plot) :
         plt.show()
     plt.close('all')
 
-    
+
     plt.plot(cd_vals_2, dd_vals_2, label = "Scale = 0.95", color = "red")
     plt.yscale("log")
     plt.ylabel("Defect density [cm$^{-2}$]")
