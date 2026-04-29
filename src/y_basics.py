@@ -262,124 +262,109 @@ def convolve(image, kernel):
 # based on a given kernel, and derivatives of the covariance with respect
 # to the coordinates of these points. The kernel is typically a Gaussian or similar smoothing function.
 class Covariance:
+    def __init__(self, img, k, scale=1):
+        """
+        Accelerated Covariance class.
+        Pre-calculates only unique kernel products and batches convolutions.
+        """
+        # Metadata about original image
+        dx = img.pixel_size
+        dx2 = dx * dx
+        dx_2 = 1.0 / dx2
+        ll_x = img.ll_x
+        ll_y = img.ll_y
 
-  def __init__(self, img, k, scale = 1):
+        # 1. Compute Kernel Derivatives (First and Second Order)
+        kx  = np.gradient(k, dx, axis=1)
+        ky  = np.gradient(k, dx, axis=0)
+        kxx = np.gradient(kx, dx, axis=1)
+        kyy = np.gradient(ky, dx, axis=0)
+        kxy = np.gradient(kx, dx, axis=0)
 
-    # Metadata about original image
-    dx   = img.pixel_size
-    dx2  = dx*dx
-    dx_2 = 1.0/dx2
-    ll_x = img.ll_x
-    ll_y = img.ll_y
+        # 2. Define the Unique Product Kernels
+        # We map the orders (a, b, c, d) to the product of k_ab and k_cd.
+        # This list covers every unique combination required by your derivative() method.
+        kernel_map = {
+            (0, 0, 0, 0): k * k,
+            (1, 0, 0, 0): kx * k,
+            (0, 1, 0, 0): ky * k,
+            (2, 0, 0, 0): kxx * k,
+            (0, 2, 0, 0): kyy * k,
+            (1, 1, 0, 0): kxy * k,
+            (1, 0, 1, 0): kx * kx,
+            (1, 0, 0, 1): kx * ky,
+            (0, 1, 0, 1): ky * ky,
+            (2, 0, 1, 0): kxx * kx,
+            (2, 0, 0, 1): kxx * ky,
+            (0, 2, 1, 0): kyy * kx,
+            (0, 2, 0, 1): kyy * ky,
+            (1, 1, 1, 0): kxy * kx,
+            (1, 1, 0, 1): kxy * ky,
+            (2, 0, 2, 0): kxx * kxx,
+            (0, 2, 2, 0): kyy * kxx,
+            (0, 2, 0, 2): kyy * kyy,
+            (2, 0, 1, 1): kxx * kxy,
+            (0, 2, 1, 1): kyy * kxy,
+            (1, 1, 1, 1): kxy * kxy
+        }
 
-    #####################################
-    # Initialize the pointwise covariance
-    #####################################
+        # 3. Optimized Batch Convolution
+        # Perform padding once for the entire batch to save O(N) allocation time
+        k_h, k_w = k.shape
+        pad_h, pad_w = k_h // 2, k_w // 2
+        padded_data = np.pad(img.data, ((pad_h, pad_h), (pad_w, pad_w)), mode='wrap')
 
-    # Compute gradient of the kernel
-    kx = np.gradient(k, dx, axis=1)
-    ky = np.gradient(k, dx, axis=0)
-    kxx= np.gradient(kx,dx, axis=1)
-    kyy= np.gradient(ky,dx, axis=0)
-    kxy= np.gradient(kx,dx, axis=0)
+        self.storage = {}
+        for orders, prod_kernel in kernel_map.items():
+            # Use BORDER_CONSTANT because padding is already handled by 'wrap'
+            conv = cv2.filter2D(padded_data, -1, prod_kernel, borderType=cv2.BORDER_CONSTANT)
+            # Slice back to original dimensions and store as an Image object
+            self.storage[orders] = Image(
+                dx_2 * scale * conv[pad_h:-pad_h, pad_w:-pad_w], 
+                ll_x, ll_y, dx
+            )
 
-    # Compute products of the kernel derivatives
-    k_0_0_0_0 = np.multiply(k, k)
-    k_1_0_0_0 = np.multiply(kx, k)
-    k_0_1_0_0 = np.multiply(ky, k)
-    k_2_0_0_0 = np.multiply(kxx, k)
-    k_0_2_0_0 = np.multiply(kyy, k)
-    k_1_1_0_0 = np.multiply(kxy, k)
-    k_1_0_1_0 = np.multiply(kx, kx)
-    k_1_0_0_1 = np.multiply(kx, ky)
-    k_0_1_0_1 = np.multiply(ky, ky)
-    k_2_0_1_0 = np.multiply(kxx, kx)
-    k_2_0_0_1 = np.multiply(kxx, ky)
-    k_0_2_1_0 = np.multiply(kyy, kx)
-    k_0_2_0_1 = np.multiply(kyy, ky)
-    k_1_1_1_0 = np.multiply(kxy, kx)
-    k_1_1_0_1 = np.multiply(kxy, ky)
-    k_2_0_2_0 = np.multiply(kxx, kxx)
-    k_0_2_2_0 = np.multiply(kyy, kxx)
-    k_0_2_0_2 = np.multiply(kyy, kyy)
-    k_2_0_1_1 = np.multiply(kxx, kxy)
-    k_0_2_1_1 = np.multiply(kyy, kxy)
-    k_1_1_1_1 = np.multiply(kxy, kxy)
+        # Smoothed version of the input image (standard convolution)
+        self.I = Image(convolve(img.data, k), ll_x, ll_y, dx)
 
-    #####################################
-    # Compute the covariance elements
-    #####################################
+    def derivative(self, p, orders=(0, 0, 0, 0)):
+        """
+        Returns the covariance derivative for a given point.
+        Uses symmetry to map redundant order requests to pre-computed results.
+        """
+        o = list(orders)
 
-    # Smoothed version of the input image
-    self.I  = Image(convolve(img.data, k), ll_x, ll_y, dx)
+        # Symmetry Mapping Logic:
+        # 1. (a,b,c,d) is symmetric to (c,d,a,b). We ensure the "larger" tuple is first.
+        if (o[2], o[3]) > (o[0], o[1]):
+            o = [o[2], o[3], o[0], o[1]]
 
-    # Covariance elements
-    self.S_0_0_0_0 = Image(dx_2*scale*convolve(img.data, k_0_0_0_0), ll_x, ll_y, dx)
-    self.S_1_0_0_0 = Image(dx_2*scale*convolve(img.data, k_1_0_0_0), ll_x, ll_y, dx)
-    self.S_0_1_0_0 = Image(dx_2*scale*convolve(img.data, k_0_1_0_0), ll_x, ll_y, dx)
-    self.S_2_0_0_0 = Image(dx_2*scale*convolve(img.data, k_2_0_0_0), ll_x, ll_y, dx)
-    self.S_0_2_0_0 = Image(dx_2*scale*convolve(img.data, k_0_2_0_0), ll_x, ll_y, dx)
-    self.S_1_1_0_0 = Image(dx_2*scale*convolve(img.data, k_1_1_0_0), ll_x, ll_y, dx)
-    self.S_1_0_1_0 = Image(dx_2*scale*convolve(img.data, k_1_0_1_0), ll_x, ll_y, dx)
-    self.S_1_0_0_1 = Image(dx_2*scale*convolve(img.data, k_1_0_0_1), ll_x, ll_y, dx)
-    self.S_0_1_0_1 = Image(dx_2*scale*convolve(img.data, k_0_1_0_1), ll_x, ll_y, dx)
-    self.S_2_0_1_0 = Image(dx_2*scale*convolve(img.data, k_2_0_1_0), ll_x, ll_y, dx)
-    self.S_2_0_0_1 = Image(dx_2*scale*convolve(img.data, k_2_0_0_1), ll_x, ll_y, dx)
-    self.S_0_2_1_0 = Image(dx_2*scale*convolve(img.data, k_0_2_1_0), ll_x, ll_y, dx)
-    self.S_0_2_0_1 = Image(dx_2*scale*convolve(img.data, k_0_2_0_1), ll_x, ll_y, dx)
-    self.S_1_1_1_0 = Image(dx_2*scale*convolve(img.data, k_1_1_1_0), ll_x, ll_y, dx)
-    self.S_1_1_0_1 = Image(dx_2*scale*convolve(img.data, k_1_1_0_1), ll_x, ll_y, dx)
-    self.S_2_0_2_0 = Image(dx_2*scale*convolve(img.data, k_2_0_2_0), ll_x, ll_y, dx)
-    self.S_0_2_2_0 = Image(dx_2*scale*convolve(img.data, k_0_2_2_0), ll_x, ll_y, dx)
-    self.S_0_2_0_2 = Image(dx_2*scale*convolve(img.data, k_0_2_0_2), ll_x, ll_y, dx)
-    self.S_2_0_1_1 = Image(dx_2*scale*convolve(img.data, k_2_0_1_1), ll_x, ll_y, dx)
-    self.S_0_2_1_1 = Image(dx_2*scale*convolve(img.data, k_0_2_1_1), ll_x, ll_y, dx)
-    self.S_1_1_1_1 = Image(dx_2*scale*convolve(img.data, k_1_1_1_1), ll_x, ll_y, dx)
+        # 2. Specific alias mappings (e.g., (1,0,0,0) and (0,0,1,0) are the same)
+        # We convert to a tuple to use as a dictionary key.
+        target = tuple(o)
 
-  def derivative(self, p, orders=(0, 0, 0, 0)) :
+        # Fallback aliases for redundant indices
+        alias_map = {
+            (0, 0, 1, 0): (1, 0, 0, 0),
+            (0, 0, 0, 1): (0, 1, 0, 0),
+            (0, 0, 1, 1): (1, 1, 0, 0),
+            (0, 1, 1, 0): (1, 0, 0, 1),
+            (0, 0, 2, 0): (2, 0, 0, 0),
+            (0, 0, 0, 2): (0, 2, 0, 0),
+            (1, 0, 2, 0): (2, 0, 1, 0),
+            (0, 1, 2, 0): (2, 0, 0, 1),
+            (1, 0, 0, 2): (0, 2, 1, 0),
+            (0, 1, 0, 2): (0, 2, 0, 1),
+            (1, 0, 1, 1): (1, 1, 1, 0),
+            (0, 1, 1, 1): (1, 1, 0, 1),
+            (2, 0, 0, 2): (0, 2, 2, 0),
+            (1, 1, 2, 0): (2, 0, 1, 1),
+            (1, 1, 0, 2): (0, 2, 1, 1),
+        }
 
-    if   orders == (0, 0, 0, 0) :
-      return self.S_0_0_0_0.get(p)
-    elif orders == (1, 0, 0, 0) or orders == (0, 0, 1, 0) :
-      return self.S_1_0_0_0.get(p)
-    elif orders == (0, 1, 0, 0) or orders == (0, 0, 0, 1) :
-      return self.S_0_1_0_0.get(p)
-    elif orders == (1, 0, 1, 0) :
-      return self.S_1_0_1_0.get(p)
-    elif orders == (0, 1, 0, 1) :
-      return self.S_0_1_0_1.get(p)
-    elif orders == (1, 1, 0, 0) or orders == (0, 0, 1, 1) :
-      return self.S_1_1_0_0.get(p)
-    elif orders == (1, 0, 0, 1) or orders == (0, 1, 1, 0) :
-      return self.S_1_0_0_1.get(p)
-    elif orders == (2, 0, 0, 0) or orders == (0, 0, 2, 0) :
-      return self.S_2_0_0_0.get(p)
-    elif orders == (0, 2, 0, 0) or orders == (0, 0, 0, 2) :
-      return self.S_0_2_0_0.get(p)
-    elif orders == (2, 0, 1, 0) or orders == (1, 0, 2, 0) :
-      return self.S_2_0_1_0.get(p)
-    elif orders == (2, 0, 0, 1) or orders == (0, 1, 2, 0) :
-      return self.S_2_0_0_1.get(p)
-    elif orders == (0, 2, 1, 0) or orders == (1, 0, 0, 2) :
-      return self.S_0_2_1_0.get(p)
-    elif orders == (0, 2, 0, 1) or orders == (0, 1, 0, 2) :
-      return self.S_0_2_0_1.get(p)
-    elif orders == (1, 1, 1, 0) or orders == (1, 0, 1, 1) :
-      return self.S_1_1_1_0.get(p)
-    elif orders == (1, 1, 0, 1) or orders == (0, 1, 1, 1) :
-      return self.S_1_1_0_1.get(p)
-    elif orders == (2, 0, 2, 0) :
-      return self.S_2_0_2_0.get(p)
-    elif orders == (0, 2, 2, 0) or orders == (2, 0, 0, 2) :
-      return self.S_0_2_2_0.get(p)
-    elif orders == (0, 2, 0, 2)  :
-      return self.S_0_2_0_2.get(p)
-    elif orders == (2, 0, 1, 1) or orders == (1, 1, 2, 0) :
-      return self.S_2_0_1_1.get(p)
-    elif orders == (0, 2, 1, 1) or orders == (1, 1, 0, 2) :
-      return self.S_0_2_1_1.get(p)
-    elif orders == (1, 1, 1, 1) :
-      return self.S_1_1_1_1.get(p)
-    else :
-      raise ValueError(f"Invalid orders: {orders}")
-      return -1
+        final_key = alias_map.get(target, target)
+
+        if final_key in self.storage:
+            return self.storage[final_key].get(p)
+        else:
+            raise ValueError(f"Derivative order {orders} (mapped to {final_key}) not computed.")
