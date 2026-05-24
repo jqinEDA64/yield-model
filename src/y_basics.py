@@ -1,8 +1,10 @@
 import numpy as np
 from tqdm import tqdm
-from scipy.interpolate import RegularGridInterpolator, CubicSpline
+from scipy.interpolate import RectBivariateSpline
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
+import multiprocessing as mp
+
 plt.rcParams['figure.dpi'] = 150
 
 # Convenient function which converts float to string with given precision.
@@ -25,7 +27,6 @@ def next_power_of_2(n):
 # Gaussian distribution (commonly used for kernels and noise models).
 ################################################################################
 
-
 # Gaussian kernel
 def getGaussian(sigma, dx) :
   # 1. Create a coordinate grid for the kernel
@@ -45,7 +46,6 @@ def getGaussian(sigma, dx) :
 ################################################################################
 # Data classes: Point, VectorField, Image, and Covariance.
 ################################################################################
-
 
 # Stores the coordinates of a point (x, y).
 @dataclass
@@ -148,15 +148,8 @@ class Image:
     self.x_coords = ll_x + np.arange(self.width) * pixel_size
     self.y_coords = ll_y + np.arange(self.height) * pixel_size
 
-    # Initialize the interpolator (cubic)
-    # Note: RegularGridInterpolator expects coords in (y, x) order for (row, col) data
-    self._interpolator = RegularGridInterpolator(
-        (self.y_coords, self.x_coords),
-        self.data,
-        method='cubic',
-        bounds_error=False,
-        fill_value=None   # Extrapolates or returns NaN based on preference
-    )
+    # Initialize the interpolator (bicubic spline)
+    self._interpolator = RectBivariateSpline(x=self.x_coords, y=self.y_coords, z=self.data.T, kx=3, ky=3)
 
     self.data_FFT = None  # Placeholder for FFT-based convolution if needed
 
@@ -174,7 +167,7 @@ class Image:
        raise ValueError("Point is outside the image boundaries: ")
 
     # Interpolator takes a point as [[y, x]]
-    return self._interpolator([[pt.y, pt.x]])[0]
+    return self._interpolator(pt.x, pt.y)[0, 0]
 
   def getFFTData(self):
     """
@@ -281,6 +274,27 @@ def convolve(image, kernel):
     
     return conv_result
 
+
+# Top-level standalone function required for Python's multiprocessing pickle serialization
+def _execute_single_spectral_convolution(args):
+    orders, prod_kernel, img_fft, h, w, shift_h, shift_w, dx, dx_2, ll_x, ll_y, scale = args
+    
+    # Real FFT of the product matrix matching layout grid dimensions
+    prod_kernel_fft = np.fft.rfft2(prod_kernel, s=(h, w))
+    
+    # Element-wise frequency filter multiplication
+    conv_fft = img_fft * prod_kernel_fft
+    
+    # Inverse transform back to spatial domain
+    conv = np.fft.irfft2(conv_fft, s=(h, w))
+    conv = np.roll(conv, shift=(shift_h, shift_w), axis=(0, 1))
+
+    # Build Image object
+    img  = Image(dx_2*scale*conv, ll_x, ll_y, dx)
+
+    return orders, img
+
+
 # The Covariance class computes the covariance between points in the image
 # based on a given kernel, and derivatives of the covariance with respect
 # to the coordinates of these points. The kernel is typically a Gaussian or similar smoothing function.
@@ -288,7 +302,7 @@ class Covariance:
     def __init__(self, img, k, scale=1):
         """
         Ultra-Accelerated EDA-Periodic Covariance Class.
-        Uses pure spectral operators for derivatives and pre-cached real-space products.
+        Uses pure spectral operators for derivatives and multiprocessing parallel loops.
         """
         # 1. Metadata and dimensions
         dx = img.pixel_size
@@ -302,7 +316,6 @@ class Covariance:
         img_fft = img.getFFTData()
 
         # 3. COMPUTE K-DERIVATIVES IN FOURIER SPACE (Exact EDA Periodicity)
-        # s=(h, w) ensures the kernel matches layout canvas dimensions
         k_f = np.zeros((h, w))
         k_h, k_w = k.shape
         k_f[:k_h, :k_w] = k
@@ -333,25 +346,21 @@ class Covariance:
             (2, 0, 1, 1): kxx * kxy,   (0, 2, 1, 1): kyy * kxy,   (1, 1, 1, 1): kxy * kxy
         }
 
-        # 5. BATCH SPECTRAL CONVOLUTIONS
-        # Since the FFT places the kernel origin at (0,0), we precompute the exact spatial 
-        # phase roll parameter to keep everything perfectly centered aligned with OpenCV.
-        k_h, k_w = k.shape
+        # 5. PARALLEL SPECTRAL CONVOLUTIONS VIA MULTIPROCESSING
         shift_h, shift_w = -(k_h // 2), -(k_w // 2)
         
-        self.storage = {}
-        for orders, prod_kernel in tqdm(kernel_map.items(), desc="Pre-computing covariance derivatives"):
-            # Real FFT of the product matrix matching layout grid dimensions
-            prod_kernel_fft = np.fft.rfft2(prod_kernel, s=(h, w))
-            
-            # Element-wise frequency filter multiplication
-            conv_fft = img_fft * prod_kernel_fft
-            
-            # Inverse transform back to spatial domain
-            conv = np.fft.irfft2(conv_fft, s=(h, w))
-            conv = np.roll(conv, shift=(shift_h, shift_w), axis=(0, 1))
-            
-            self.storage[orders] = Image(dx_2 * scale * conv, ll_x, ll_y, dx)
+        # Package tasks for the multiprocessing workers
+        tasks = [
+            (orders, prod_kernel, img_fft, h, w, shift_h, shift_w, dx, dx_2, ll_x, ll_y, scale)
+            for orders, prod_kernel in kernel_map.items()
+        ]
+        
+        # Utilize a pool limit suited for typical multi-core CPU bandwidth
+        num_workers = min(mp.cpu_count(), 8)
+        
+        with mp.Pool(processes=num_workers) as pool:
+            results = pool.map(_execute_single_spectral_convolution, tasks)
+        self.storage = {orders: img_obj for orders, img_obj in results}
 
         # 6. Standard Nominal Convolution I_0 = img * k
         k_padded_fft = np.fft.rfft2(k, s=(h, w))
