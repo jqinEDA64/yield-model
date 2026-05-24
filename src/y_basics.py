@@ -14,6 +14,12 @@ def flToStr(val, precision=2, isSci=False):
   else:
     return f"{val:.{precision}f}"
 
+# Useful for FFT sizes
+def next_power_of_2(n):
+    res = 1
+    while res < n:
+        res *= 2
+    return res
 
 ################################################################################
 # Gaussian distribution (commonly used for kernels and noise models).
