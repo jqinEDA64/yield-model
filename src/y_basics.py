@@ -368,3 +368,20 @@ class Covariance:
             return self.storage[final_key].get(p)
         else:
             raise ValueError(f"Derivative order {orders} (mapped to {final_key}) not computed.")
+
+    def sample_noise_field(self, seed=None):
+        """
+        VIRTUAL METHOD: Must be overridden by derived classes to supply 
+        the target random distribution logic.
+        """
+        raise NotImplementedError(
+            "sample_noise_field() must be implemented by a specific distribution subclass."
+        )
+
+    def sample_noisy_image(self, seed=None):
+        """
+        Synthesizes a complete stochastic realization using whatever distribution 
+        the child class implements.
+        """
+        noise_field = self.sample_noise_field(seed=seed)
+        return Image(self.I.data + noise_field.data, self.I.ll_x, self.I.ll_y, self.I.pixel_size)
