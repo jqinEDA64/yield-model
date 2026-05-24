@@ -20,7 +20,7 @@ class GaussianCovariance(y_basics.Covariance):
         
         # 2. Pre-calculate the combined scaling factor to save clock cycles in the loop
         #    This merges the continuum scale with the FFT normalization scaling.
-        self._spectral_scale = (np.sqrt(self._scale) / self.I.pixel_size)
+        self._spectral_scale = (np.sqrt(scale) / self.I.pixel_size)
 
     def sample_noise_field(self, seed=None):
 

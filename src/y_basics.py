@@ -149,8 +149,10 @@ class Image:
         self.data,
         method='cubic',
         bounds_error=False,
-        fill_value=None # Extrapolates or returns NaN based on preference
+        fill_value=None   # Extrapolates or returns NaN based on preference
     )
+
+    self.data_FFT = None  # Placeholder for FFT-based convolution if needed
 
   def get(self, pt):
     """
@@ -167,6 +169,15 @@ class Image:
 
     # Interpolator takes a point as [[y, x]]
     return self._interpolator([[pt.y, pt.x]])[0]
+
+  def getFFTData(self):
+    """
+    Computes the 2D FFT of the image data for convolution purposes.
+    Caches the result to avoid redundant calculations.
+    """
+    if self.data_FFT is None:
+        self.data_FFT = np.fft.rfft2(self.data)
+    return self.data_FFT
 
   def compute_der_pt(self, pt, dir = ""):
     """
@@ -240,7 +251,7 @@ class Image:
       plt.title(title)
     plt.show()
 
-
+'''
 def convolve(image, kernel):
   """
   Performs 2D convolution with periodic (circular) boundary conditions.
@@ -256,7 +267,31 @@ def convolve(image, kernel):
 
   # Slice back to the original image dimensions
   return conv[pad_h:-pad_h, pad_w:-pad_w]
+'''
 
+def convolve(image, kernel):
+    """
+    Performs 2D convolution with exact periodic boundary conditions using FFT.
+    """
+    h, w = image.height, image.width
+    
+    # 1. Transform both the image and the kernel to the frequency domain
+    #    s=(h, w) automatically pads the kernel to match the image dimensions
+    kernel_fft = np.fft.rfft2(kernel, s=(h, w))
+    
+    # 2. Element-wise multiplication in the frequency domain
+    filtered_fft = image.getFFTData() * kernel_fft
+    
+    # 3. Inverse transform back to spatial domain, enforcing original shape
+    conv_result = np.fft.irfft2(filtered_fft, s=(h, w))
+    
+    # 4. Crucial: OpenCV's filter2D shifts the kernel to keep it centered.
+    #    FFT convolution introduces a phase shift if the kernel origin isn't at (0,0).
+    #    We use np.roll to center the result exactly like OpenCV does.
+    k_h, k_w = kernel.shape
+    conv_result = np.roll(conv_result, shift=(-(k_h // 2), -(k_w // 2)), axis=(0, 1))
+    
+    return conv_result
 
 # The Covariance class computes the covariance between points in the image
 # based on a given kernel, and derivatives of the covariance with respect
@@ -310,10 +345,11 @@ class Covariance:
 
         # 3. Optimized Batch Convolution
         # Perform padding once for the entire batch to save O(N) allocation time
-        k_h, k_w = k.shape
-        pad_h, pad_w = k_h // 2, k_w // 2
-        padded_data = np.pad(img.data, ((pad_h, pad_h), (pad_w, pad_w)), mode='wrap')
+        #k_h, k_w = k.shape
+        #pad_h, pad_w = k_h // 2, k_w // 2
+        #padded_data = np.pad(img.data, ((pad_h, pad_h), (pad_w, pad_w)), mode='wrap')
 
+        '''
         self.storage = {}
         for orders, prod_kernel in kernel_map.items():
             # Use BORDER_CONSTANT because padding is already handled by 'wrap'
@@ -323,9 +359,15 @@ class Covariance:
                 dx_2 * scale * conv[pad_h:-pad_h, pad_w:-pad_w], 
                 ll_x, ll_y, dx
             )
+        '''
 
         # Smoothed version of the input image (standard convolution)
-        self.I = Image(convolve(img.data, k), ll_x, ll_y, dx)
+        self.I = Image(convolve(img, k), ll_x, ll_y, dx)
+
+        self.storage = {}
+        for orders, prod_kernel in kernel_map.items():
+            conv = convolve(img, prod_kernel) 
+            self.storage[orders] = Image(dx_2 * scale * conv, ll_x, ll_y, dx)
 
     def derivative(self, p, orders=(0, 0, 0, 0)):
         """
