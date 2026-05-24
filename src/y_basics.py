@@ -275,8 +275,8 @@ class Covariance:
         ll_y = img.ll_y
 
         # 1. Compute Kernel Derivatives (First and Second Order)
-        kx  = np.gradient(k, dx, axis=1)
-        ky  = np.gradient(k, dx, axis=0)
+        kx  = np.gradient(k , dx, axis=1)
+        ky  = np.gradient(k , dx, axis=0)
         kxx = np.gradient(kx, dx, axis=1)
         kyy = np.gradient(ky, dx, axis=0)
         kxy = np.gradient(kx, dx, axis=0)
