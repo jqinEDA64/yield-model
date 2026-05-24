@@ -1,5 +1,5 @@
-import cv2
 import numpy as np
+from tqdm import tqdm
 from scipy.interpolate import RegularGridInterpolator, CubicSpline
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
@@ -251,24 +251,6 @@ class Image:
       plt.title(title)
     plt.show()
 
-'''
-def convolve(image, kernel):
-  """
-  Performs 2D convolution with periodic (circular) boundary conditions.
-  """
-  k_h, k_w = kernel.shape
-  # Pad by half the kernel size on all sides using 'wrap'
-  pad_h, pad_w = k_h // 2, k_w // 2
-  padded = np.pad(image, ((pad_h, pad_h), (pad_w, pad_w)), mode='wrap')
-
-  # Perform convolution on the padded image
-  # We use BORDER_CONSTANT here because the padding already handles the wrap
-  conv = cv2.filter2D(padded, -1, kernel, borderType=cv2.BORDER_CONSTANT)
-
-  # Slice back to the original image dimensions
-  return conv[pad_h:-pad_h, pad_w:-pad_w]
-'''
-
 def convolve(image, kernel):
     """
     Performs 2D convolution with exact periodic boundary conditions using FFT.
@@ -299,75 +281,78 @@ def convolve(image, kernel):
 class Covariance:
     def __init__(self, img, k, scale=1):
         """
-        Accelerated Covariance class.
-        Pre-calculates only unique kernel products and batches convolutions.
+        Ultra-Accelerated EDA-Periodic Covariance Class.
+        Uses pure spectral operators for derivatives and pre-cached real-space products.
         """
-        # Metadata about original image
+        # 1. Metadata and dimensions
         dx = img.pixel_size
-        dx2 = dx * dx
-        dx_2 = 1.0 / dx2
+        dx_2 = 1.0 / (dx * dx)
         ll_x = img.ll_x
         ll_y = img.ll_y
+        h, w = img.height, img.width
+        self._scale = scale
 
-        # 1. Compute Kernel Derivatives (First and Second Order)
-        kx  = np.gradient(k , dx, axis=1)
-        ky  = np.gradient(k , dx, axis=0)
-        kxx = np.gradient(kx, dx, axis=1)
-        kyy = np.gradient(ky, dx, axis=0)
-        kxy = np.gradient(kx, dx, axis=0)
+        # 2. Get the pre-cached Real-FFT data of the original image (Computed ONCE)
+        img_fft = img.getFFTData()
 
-        # 2. Define the Unique Product Kernels
-        # We map the orders (a, b, c, d) to the product of k_ab and k_cd.
-        # This list covers every unique combination required by your derivative() method.
+        # 3. COMPUTE K-DERIVATIVES IN FOURIER SPACE (Exact EDA Periodicity)
+        # s=(h, w) ensures the kernel matches layout canvas dimensions
+        k_f = np.zeros((h, w))
+        k_h, k_w = k.shape
+        k_f[:k_h, :k_w] = k
+        
+        # Take the FFT of our full-sized kernel array
+        k_fft = np.fft.fft2(k_f)
+        
+        # Frequency grids scaled to radians/unit
+        u = np.fft.fftfreq(w, d=dx) * 2 * np.pi
+        v = np.fft.fftfreq(h, d=dx) * 2 * np.pi
+        UU, VV = np.meshgrid(u, v)
+
+        # High-order derivatives computed exactly with zero boundary leakage
+        kx  = np.real(np.fft.ifft2(1j * UU * k_fft))
+        ky  = np.real(np.fft.ifft2(1j * VV * k_fft))
+        kxx = np.real(np.fft.ifft2(-UU**2 * k_fft))
+        kyy = np.real(np.fft.ifft2(-VV**2 * k_fft))
+        kxy = np.real(np.fft.ifft2(-UU * VV * k_fft))
+
+        # 4. Map the Real-Space Combinations 
         kernel_map = {
-            (0, 0, 0, 0): k * k,
-            (1, 0, 0, 0): kx * k,
-            (0, 1, 0, 0): ky * k,
-            (2, 0, 0, 0): kxx * k,
-            (0, 2, 0, 0): kyy * k,
-            (1, 1, 0, 0): kxy * k,
-            (1, 0, 1, 0): kx * kx,
-            (1, 0, 0, 1): kx * ky,
-            (0, 1, 0, 1): ky * ky,
-            (2, 0, 1, 0): kxx * kx,
-            (2, 0, 0, 1): kxx * ky,
-            (0, 2, 1, 0): kyy * kx,
-            (0, 2, 0, 1): kyy * ky,
-            (1, 1, 1, 0): kxy * kx,
-            (1, 1, 0, 1): kxy * ky,
-            (2, 0, 2, 0): kxx * kxx,
-            (0, 2, 2, 0): kyy * kxx,
-            (0, 2, 0, 2): kyy * kyy,
-            (2, 0, 1, 1): kxx * kxy,
-            (0, 2, 1, 1): kyy * kxy,
-            (1, 1, 1, 1): kxy * kxy
+            (0, 0, 0, 0): k_f * k_f,   (1, 0, 0, 0): kx * k_f,    (0, 1, 0, 0): ky * k_f,
+            (2, 0, 0, 0): kxx * k_f,   (0, 2, 0, 0): kyy * k_f,   (1, 1, 0, 0): kxy * k_f,
+            (1, 0, 1, 0): kx * kx,     (1, 0, 0, 1): kx * ky,     (0, 1, 0, 1): ky * ky,
+            (2, 0, 1, 0): kxx * kx,    (2, 0, 0, 1): kxx * ky,    (0, 2, 1, 0): kyy * kx,
+            (0, 2, 0, 1): kyy * ky,    (1, 1, 1, 0): kxy * kx,    (1, 1, 0, 1): kxy * ky,
+            (2, 0, 2, 0): kxx * kxx,   (0, 2, 2, 0): kyy * kxx,   (0, 2, 0, 2): kyy * kyy,
+            (2, 0, 1, 1): kxx * kxy,   (0, 2, 1, 1): kyy * kxy,   (1, 1, 1, 1): kxy * kxy
         }
 
-        # 3. Optimized Batch Convolution
-        # Perform padding once for the entire batch to save O(N) allocation time
-        #k_h, k_w = k.shape
-        #pad_h, pad_w = k_h // 2, k_w // 2
-        #padded_data = np.pad(img.data, ((pad_h, pad_h), (pad_w, pad_w)), mode='wrap')
-
-        '''
+        # 5. BATCH SPECTRAL CONVOLUTIONS
+        # Since the FFT places the kernel origin at (0,0), we precompute the exact spatial 
+        # phase roll parameter to keep everything perfectly centered aligned with OpenCV.
+        k_h, k_w = k.shape
+        shift_h, shift_w = -(k_h // 2), -(k_w // 2)
+        
         self.storage = {}
-        for orders, prod_kernel in kernel_map.items():
-            # Use BORDER_CONSTANT because padding is already handled by 'wrap'
-            conv = cv2.filter2D(padded_data, -1, prod_kernel, borderType=cv2.BORDER_CONSTANT)
-            # Slice back to original dimensions and store as an Image object
-            self.storage[orders] = Image(
-                dx_2 * scale * conv[pad_h:-pad_h, pad_w:-pad_w], 
-                ll_x, ll_y, dx
-            )
-        '''
-
-        # Smoothed version of the input image (standard convolution)
-        self.I = Image(convolve(img, k), ll_x, ll_y, dx)
-
-        self.storage = {}
-        for orders, prod_kernel in kernel_map.items():
-            conv = convolve(img, prod_kernel) 
+        for orders, prod_kernel in tqdm(kernel_map.items(), desc="Pre-computing covariance derivatives"):
+            # Real FFT of the product matrix matching layout grid dimensions
+            prod_kernel_fft = np.fft.rfft2(prod_kernel, s=(h, w))
+            
+            # Element-wise frequency filter multiplication
+            conv_fft = img_fft * prod_kernel_fft
+            
+            # Inverse transform back to spatial domain
+            conv = np.fft.irfft2(conv_fft, s=(h, w))
+            conv = np.roll(conv, shift=(shift_h, shift_w), axis=(0, 1))
+            
             self.storage[orders] = Image(dx_2 * scale * conv, ll_x, ll_y, dx)
+
+        # 6. Standard Nominal Convolution I_0 = img * k
+        k_padded_fft = np.fft.rfft2(k, s=(h, w))
+        nominal_conv = np.fft.irfft2(img_fft * k_padded_fft, s=(h, w))
+        nominal_conv = np.roll(nominal_conv, shift=(shift_h, shift_w), axis=(0, 1))
+        
+        self.I = Image(nominal_conv, ll_x, ll_y, dx)
 
     def derivative(self, p, orders=(0, 0, 0, 0)):
         """
