@@ -10,9 +10,40 @@ from scipy.interpolate import CubicSpline
 
 
 class GaussianCovariance(y_basics.Covariance):
-  def __init__(self, img, sigma, scale = 1):
-    g = y_basics.getGaussian(sigma, img.pixel_size)
-    super().__init__(img, g, scale)
+    def __init__(self, img, sigma, scale = 1):
+        g = y_basics.getGaussian(sigma, img.pixel_size)
+        super().__init__(img, g, scale)
+
+        # --- Pre-computation for Ultra-Fast Spectral Sampling ---
+        # 1. We pad/match the spatial kernel to the exact size of the image grid
+        self._kernel_fft = np.fft.rfft2(g, s=(self.I.height, self.I.width))
+        
+        # 2. Pre-calculate the combined scaling factor to save clock cycles in the loop
+        #    This merges the continuum scale with the FFT normalization scaling.
+        self._spectral_scale = (np.sqrt(scale) / self.I.pixel_size)
+
+    def sample_noise_field(self, seed=None):
+
+        if seed is not None:
+            np.random.seed(seed)
+            
+        # 1. Generate uncorrelated Gaussian white noise
+        white_noise = np.random.normal(0.0, 1.0, (self.I.height, self.I.width))
+        
+        # 2. Transform noise to frequency domain (rfft2 leverages real-valued symmetry)
+        noise_fft = np.fft.rfft2(white_noise)
+        
+        # 3. Frequency domain filtering (element-wise multiplication)
+        filtered_fft = noise_fft * self._kernel_fft
+        
+        # 4. Transform back to spatial domain 
+        #    irfft2 automatically guarantees a real-valued output array matching the shape
+        filtered_noise = np.fft.irfft2(filtered_fft, s=(self.I.height, self.I.width))
+        
+        # 5. Apply the pre-calculated scale factor
+        scaled_noise_data = filtered_noise * self._spectral_scale
+        
+        return y_basics.Image(scaled_noise_data, self.I.ll_x, self.I.ll_y, self.I.pixel_size)
 
 
 ###############################################

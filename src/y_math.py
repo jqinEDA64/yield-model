@@ -140,6 +140,8 @@ def getCov_YX(cov, pt) :
 
   return out
 
+# Computes the conditional distribution of the Hessian,
+# conditional on \nabla I = 0 and I = threshold.
 def getMean_Cov_Y_cond(img, cov, pt, th) :
   mu_x = getMean_X(img, pt)
   mu_y = getMean_Y(img, pt)

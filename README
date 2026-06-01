@@ -11,6 +11,9 @@ pytest
 Run the tests with the following command:
 "pytest tests/test_basics.py" (or similar for different test files).
 
+Run a single test with the following command (or similar):
+pytest tests/test_dd_single_patterning.py::test_dd_1D_LS
+
 You can turn on the plotting functions with "--plot".
 You can turn on printing to terminal with "-s --print".
 
